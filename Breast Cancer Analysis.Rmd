@@ -1,0 +1,691 @@
+---
+title: "Breast Cancer Analysis"
+author: "Sophia Juliana Hoeller"
+date: "2024-08-05"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+# Breast Cancer Analysis
+
+**Source**: <https://www.kaggle.com/datasets/uciml/breast-cancer-wisconsin-data>
+
+This dataset contains information about breast cancers in 1995 in Wisconsin, USA.
+
+**Columns**:
+
+-   **id**: ID number of the patient;
+
+-   **diagnosis**: the diagnosis of breast tissues (M = malignant, B = benign);
+
+-   **radius**: distances from center to points on the perimeter;
+
+-   **smoothness**: of local variation in radius lengths;
+
+-   **texture:** standard deviation of gray-scale values;
+
+-   **area**;
+
+-   **compactness**: (perimeter\^2 / area - 1.0)
+
+-   **concavity**(severity of concave portions of the contour)
+
+-   **concave points** (number of concave portions of the contour)
+
+-   **symmetry**
+
+-   **fractal dimension** ("coastline approximation" - 1)
+
+The dataset consists of 32 columns, which essentially represent 11 core variables. Nine of these variables are further characterized by their mean, standard deviation, and worst values, offering a detailed perspective on tumor characteristics.
+
+**Goal**: develop and evaluate predictive models that can accurately classify whether a tumor is malignant or benign based on various features.
+
+## 1. Exploratory Data Analysis
+
+### 1.1 Loading and structuring the data
+
+```{r}
+data <- read.csv("/Users/sophiahoeller/Downloads/breast-cancer-wisconsin-data.csv")
+head(data)
+dim(data)
+```
+
+```{r}
+colnames(data)
+```
+
+I check if there are missing values and it is noticeable that there aren't.
+
+```{r}
+colSums(is.na(data)) 
+```
+
+```{r}
+summary(data)
+```
+
+I proceed to inspect the categorical variable `diagnosis` and then transform it into a factor with numeric labels: `0` for Benign and `1` for Malignant.
+
+```{r}
+table(data$diagnosis=="M")
+prop.table(table(data$diagnosis))  
+```
+
+```{r}
+data["diagnosis"] <- factor(data$diagnosis,
+                            levels = c("B","M"), labels = c(0,1))
+```
+
+### 1.2 Graphical Analysis
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+```
+
+#### 1. Diagnosis Plot
+
+```{r}
+ggplot(data, aes(x = diagnosis)) +
+  geom_bar(fill = c("steelblue", "tomato")) +
+  labs(title = "Diagnosis", x = "Diagnosis", y = "Count") +
+  theme_minimal()
+```
+
+The plot reveals that in this dataset, **benign tumors** (represented by the blue bar) are more common than **malignant tumors** (represented by the red bar).
+
+This is evident from the higher count for the benign diagnosis.
+
+#### 2. Distribution of `radius_mean` by Diagnosis
+
+```{r}
+{ggplot(data, aes(x = radius_mean, fill = diagnosis)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Distribution of Radius Mean by Diagnosis", x = "Radius Mean", y = "Densità") +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "tomato")) +
+  theme_minimal()}
+```
+
+**Key-features:**
+
+-   **Benign tumors** (blue) tend to have a lower `radius_mean` compared to malignant tumors (red), as evidenced by the peak of the blue curve being positioned towards the left of the plot.
+
+-   **Malignant tumors** generally exhibit higher values for `radius_mean`, with a wider spread compared to benign tumors.
+
+#### 3. Relationship between `radius_mean` and `area_mean` colored by Diagnosis
+
+```{r}
+ggplot(data, aes(x = radius_mean, y = area_mean, color = diagnosis)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Relationship between Radius Mean and Area Mean", x = "Radius Mean", y = "Area Mean") +
+  scale_color_manual(values = c("0" = "steelblue", "1" = "tomato")) +
+  theme_minimal()
+```
+
+This scatter plot demonstrates a strong positive relationship between the `radius_mean` and `area_mean` variables, indicating that as the mean radius of the tumor cells increases, the area also increases.
+
+**Key features**:
+
+-   **Benign tumors** (represented by blue dots) generally have smaller `radius_mean` and `area_mean` values, while malignant tumors (represented by red dots) are typically larger in both dimensions.
+
+-   The separation between the two diagnosis is quite clear, especially at higher values of `radius_mean` and `area_mean`, where malignant tumors dominate.
+
+#### 4. Distribution of `compactness` by Diagnosis
+
+```{r}
+ggplot(data, aes(x = compactness_mean, fill = diagnosis)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Distribution of Compactness by Diagnosis", x = "Compactness", y = "Density") +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "tomato")) +
+  theme_minimal()
+```
+
+**Key features:**
+
+-   **Benign tumors** (blue) generally have lower values of `compactness_mean`, with the majority of cases clustered around lower compactness values.
+
+-   **Malignant tumors** (red) tend to have higher values of `compactness_mean`, with their distribution peaking at a higher compactness value compared to benign tumors.
+
+#### 5. Correlation Matrix for Some Key Variables
+
+```{r}
+library(corrplot)
+library(dplyr)
+library(magrittr)
+
+selected_vars <- data %>%select(radius_mean, smoothness_mean, texture_mean, area_mean, compactness_mean, concavity_mean, concave.points_mean, symmetry_mean, fractal_dimension_mean)
+
+cor_matrix <- cor(selected_vars)
+
+corrplot(cor_matrix, method = "circle", type = "upper", tl.col = "black", tl.srt = 30)
+```
+
+**Key-features**:
+
+-   There is a strong positive correlation between `radius_mean`, `area_mean`, `compactness_mean`, `concavity_mean`, and `concave.points_mean`. These features are likely to increase together, which could indicate redundancy among these variables for predictive modeling.
+
+-   The `smoothness_mean` and `texture_mean` show moderate correlations with some features but are less correlated with others, suggesting that they might add unique information to the dataset.
+
+-   `fractal_dimension_mean` shows weaker correlations with other features, indicating it might capture different aspects of the data.
+
+## 2. PCA (Principal Component Analysis)
+
+**Principal Component Analysis (PCA)** is a statistical technique used to reduce the dimension of a dataset, while retaining as much variance as possible, by transforming the original variables into a new set of uncorrelated variables called *principal components*.
+
+I start by splitting the dataset in training and test set.
+
+```{r}
+set.seed(1)
+n <-dim(data)[1]
+index.train <- sample(1:n,round(2*n/3))
+train <-  data[index.train,]
+test <- data[-index.train,]
+```
+
+```{r}
+train_numeric <- train[, sapply(train, is.numeric)]
+
+pc.cancer <- prcomp(train_numeric, scale. = TRUE)
+sd <- pc.cancer$sdev
+p <- length(sd)
+```
+
+### 2.1 Scree Plot
+
+**Scree Plot**: A plot that shows the explained variance of each principal component in descending order. It is used to identify the optimal number of principal components to retain, looking for the point where the explained variance starts to decrease significantly.
+
+```{r}
+{plot(sd^2/sum(sd^2),type="o",pch=19,xlab="Component", main = "Scree plot",ylab='Proportion of variance')
+abline(h=1/p,col='gray')}
+```
+
+From the plot, we can observe that the **first 3 or 4 principal components** explain a significant portion of the total variance in the dataset, with a sharp decline in the variance explained by subsequent components. This suggests that most of the information in the dataset can be captured using just the first few components, making these components the most important for a reduced and more interpretable model.
+
+### 2.2 Cumulative Scree Plot
+
+**Cumulative Scree Plot**: A plot that represents the cumulative explained variance by the principal components. It helps determine how many principal components are needed to reach a certain percentage of explained variance .
+
+```{r}
+{plot(cumsum(sd^2)/sum(sd^2),type="o",pch=19,xlab="Component", main = "Cumulative scree plot",ylab='Proportion of variance',ylim=c(0,1))
+abline(h=0.9,col='gray')}
+```
+
+This cumulative scree plot suggests that the **first 5 principal components** are sufficient to capture the majority of the variance in the dataset.
+
+### 2.3 Principal Component Analysis (PCA) Loadings Plot
+
+```{r}
+pcs = pc.cancer$rotation
+{layout(matrix(1:6,nrow=2,byrow=TRUE))
+barplot((pcs[,1]), beside=T, axis.lty="solid", col=rainbow(p), main='First principal component', 
+        xlab=' ', names.arg=row.names(pcs), cex.names=0.6, las=2)
+barplot((pcs[,2]), beside=T, axis.lty="solid", col=rainbow(p), main='Second principal component', 
+        xlab=' ', names.arg=row.names(pcs), cex.names=0.6, las=2)
+barplot((pcs[,3]), beside=T, axis.lty="solid", col=rainbow(p), main='Third principal component', 
+        xlab=' ', names.arg=row.names(pcs), cex.names=0.6, las=2)
+barplot((pcs[,4]), beside=T, axis.lty="solid", col=rainbow(p), main='Fourth principal component', 
+        xlab=' ', names.arg=row.names(pcs), cex.names=0.45, las=2)
+barplot((pcs[,5]), beside=T, axis.lty="solid", col=rainbow(p), main='Fifth principal component', 
+        xlab=' ', names.arg=row.names(pcs), cex.names=0.45, las=3)}
+
+```
+
+```{r}
+pairs(pc.cancer$x[, 1:5], pch=16, asp=1)  # Solo le prime 5 componenti principali
+```
+
+These plots display the relationships between the first five principal components. The scatter plots show that these components are generally uncorrelated, as expected, but may reveal patterns that are important for further analysis.
+
+**Conclusion**: the PCA output suggests that using the first 3-5 principal components would be an effective way to reduce the dimensionality of the dataset while retaining most of the variance. However, interpreting these components might be challenging, and the original variables may still offer better interpretability for subsequent analysis.
+
+## 3. Logistic Regression
+
+### 3.1 Model Performance
+
+```{r}
+logit <-  glm(diagnosis~.,data=train,family='binomial')
+summary(logit)
+```
+
+```{r}
+str(test$diagnosis)
+table(test$diagnosis)
+
+```
+
+```{r}
+predicted_probabilities <- predict(logit, newdata=test, type="response")
+predicted_classes <- ifelse(predicted_probabilities > 0.5, 1, 0)
+
+true_classes <- test$diagnosis 
+accuracy_rate_logit <- mean(predicted_classes == true_classes)
+print(paste("Accuracy Rate:", round(accuracy_rate_logit, 4)))
+```
+
+### 3.2 Confusion Matrix
+
+```{r}
+library(caret)
+predicted_classes <- factor(predicted_classes, levels = c("0", "1"))
+true_classes <- factor(true_classes, levels = c("0", "1"))
+
+cm_logit <- confusionMatrix(data = predicted_classes, reference = true_classes, positive = "1")
+print(cm_logit)
+
+```
+
+The confusion matrix output indicates a strong model performance:
+
+-   **Accuracy**: 93.16%, indicating the overall percentage of correct predictions.
+
+-   **Sensitivity**: 93.75%, which measures the model's ability to correctly identify positive cases.
+
+-   **Specificity**: 92.73%, showing the model's ability to correctly identify negative cases.
+
+These metrics reflect a well-performing model with balanced classification ability for both positive and negative classes.
+
+### 3.3 The ROC Curve
+
+```{r}
+library(ROCR)
+logit <- glm(diagnosis ~ ., data = train, family = 'binomial')
+predicted_probabilities <- predict(logit, newdata = test, type = "response")
+
+rocplot = function(pred, truth, ...) {
+  predob = prediction(pred, truth)
+  perf = performance(predob, "tpr", "fpr")
+  plot(perf, ...)  
+  
+  auc = performance(predob, "auc")
+  return(attributes(auc)$y.values)
+}
+
+{auc.logit <-  rocplot(pred = predicted_probabilities, truth = test$diagnosis, lwd = 2, colorize = TRUE)
+text(0.85, 0.1, paste0('AUC = ', round(auc.logit[[1]], 4)), font = 2)}
+
+```
+
+The **ROC curve** displayed in the graph shows the performance of your logistic regression model in distinguishing between the two classes. The curve is close to the top left corner, indicating that the model has a good ability to discriminate between the positive and negative classes.
+
+The **AUC (Area Under the Curve)** value is 0.9492, which is very close to 1. This suggests that the model performs very well in terms of classification accuracy, with a high true positive rate and a low false positive rate. In summary, your model is highly effective at predicting the correct class labels.
+
+## 4. KNN
+
+The **K-Nearest Neighbors (KNN)** algorithm is a non-parametric supervised learning algorithm.
+
+### 4.1 Model Performance
+
+```{r}
+library(caret)
+fitControl <- trainControl(method = "cv", 
+                           number = 10,   
+                           classProbs = TRUE,  
+                           summaryFunction = twoClassSummary) 
+
+train$diagnosis <- factor(make.names(train$diagnosis))
+test$diagnosis <- factor(make.names(test$diagnosis))
+
+model_knn <- train(diagnosis~.,
+                   data=train,
+                   method="knn",
+                   metric="ROC",
+                   preProcess = c('center', 'scale'),
+                   tuneLength=10,
+                   trControl=fitControl)
+print(model_knn)
+```
+
+The optimal value selected is **k=21**, because it achieved the highest ROC score. This k value is then used for the final model.
+
+### 4.2 Confusion Matrix
+
+```{r}
+pred_knn <- predict(model_knn, test)
+cm_knn <- confusionMatrix(pred_knn, test$diagnosis, positive = "X1")
+cm_knn
+```
+
+**Key features:**
+
+-   **Accuracy (92.11%)**, meaning it correctly predicts the majority of cases.
+
+-   **Sensitivity (83.75%)**: indicating good performance in detecting true positives.
+
+-   **Specificity (98.18%)**: showing excellent precision in avoiding false positives.
+
+### 4.3 The ROC Curve
+
+```{r}
+unique(test$diagnosis)
+unique(pred_knn)
+```
+
+```{r}
+library(pROC)
+pred_prob_knn <- predict(model_knn, test, type="prob")
+roc_knn <- roc(test$diagnosis, pred_prob_knn$X1)
+auc.knn <- auc(roc_knn)
+plot(roc_knn)
+
+
+rocplot = function(pred, truth, ...) {
+  predob = prediction(pred, truth)
+  perf = performance(predob, "tpr", "fpr")
+  plot(perf, ...)  
+  auc = performance(predob, "auc")
+  return(attributes(auc)$y.values)
+}
+
+{auc.knn <-  rocplot(pred = predicted_probabilities, truth = test$diagnosis, lwd = 2, colorize = TRUE)
+text(0.85, 0.1, paste0('AUC = ', round(auc.logit[[1]], 4)), font = 2)}
+
+```
+
+The **ROC curve** displayed in the plot evaluates the performance of your k-Nearest Neighbors model in distinguishing between the two classes.
+
+## 5. Support Vector Classification
+
+**Support Vector Classification (SVC)** is a specific implementation of Support Vector Machines (SVM) focused on classification tasks. It aims to find the optimal hyperplane that separates different classes in the data.
+
+### 5.1 SVC Hyperparameter Tuning with Linear Kernel
+
+```{r}
+library(e1071)
+set.seed(1)
+tune.out=tune(svm,diagnosis~.,data=train,kernel="linear",
+              ranges=list(cost=c( 0.01, 0.1, 1,5,10)))
+
+summary(tune.out)
+```
+
+```{r}
+bestmod.SVC <- tune.out$best.model
+summary(bestmod.SVC)
+```
+
+The output shows the results of tuning for a **Support Vector Classifier (SVC)** with a linear kernel. The optimal model was found with a `cost` parameter set to 1.
+
+### 5.2 Confusion Matrix
+
+```{r}
+library(e1071)
+library(caret)
+
+model_svc <- svm(diagnosis ~ ., data = train, kernel = "linear", cost = 1)
+predictions_svc <- predict(model_svc, newdata = test)
+predictions_svc <- factor(predictions_svc, levels = levels(test$diagnosis))
+actuals <- factor(test$diagnosis)
+cm_svc <- confusionMatrix(data = predictions_svc, reference = actuals, positive = "X1")
+print(cm_svc)
+```
+
+The confusion matrix and associated statistics indicate that the SVC model performed very well on the test data and confirm that it is reliable and effective for this classification task.
+
+### 5.3 The ROC Curve
+
+```{r}
+yhat.SVC <-  attributes(predict(bestmod.SVC,test,decision.values=TRUE))$decision.values
+
+{auc.SVC <-  rocplot(pred=-yhat.SVC,truth=test$diagnosis,lwd=2,colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.SVC[[1]],4)),font=2)}
+```
+
+The ROC curve indicates excellent model performance.
+
+The **AUC (Area Under the Curve)** is 0.9938, suggesting a very high ability to distinguish between classes, this confirms the SVC model's effectiveness in classification tasks.
+
+## 6. Trees
+
+### 6.1 Model
+
+```{r}
+library(tree)
+train$diagnosis <- factor(train$diagnosis, levels = c("X0", "X1"), labels = c("B", "M"))
+
+model_tree <-  tree::tree(diagnosis~., data=train,split='gini')
+{plot(model_tree, lwd = 4, col = "darkgray")
+text(model_tree, pretty = 5, cex = 0.5, digits = 2, font = 2, col = "blue")}
+
+```
+
+The tree seems to be too big to be interpreted. Therefore, let's prune it
+
+### 6.2 Model Pruning
+
+Pruning is a crucial step to improve the model’s generalizability. Cross-validation is an effective technique for determining the optimal level of tree complexity, balancing the training error and generalization error.
+
+1.  **Cross-Validation Error Plot**:
+
+    -   The plot of cross-validation (CV) error against tree size shows how error varies as the complexity of the tree changes.
+
+    -   A smaller tree size is preferred if it results in lower CV error, indicating better model performance with fewer splits.
+
+```{r}
+cv.result = cv.tree(model_tree ,FUN=prune.misclass) 
+layout(cbind(1,2))
+plot(cv.result$size,cv.result$dev,type='b',pch=16,xlab='Size',ylab='CV error')
+{plot(cv.result$size,cv.result$dev,type='b',pch=16,xlab='Size',ylab='CV error',xlim=c(0,30))
+abline(v=8)}
+```
+
+These visualizations help to identify the best tree size (=5) for minimizing the CV error.
+
+2.  **Selecting the Best Tree Size**:
+    -   Based on the cross-validation results, the optimal tree size is chosen by selecting a specific number of nodes that minimizes the error
+
+```{r}
+prune.result = prune.misclass(model_tree,best =5)
+```
+
+3.  **Plotting the Pruned Tree**
+
+```{r}
+layout(1)
+{plot(prune.result,lwd=2,col='darkgray')
+text(prune.result,pretty=0,cex=0.8,digits=4,font=2,col='blue')}
+```
+
+```{r}
+yhat.tree = predict(prune.result,newdata=test)
+head(yhat.tree)
+```
+
+### 6.3 Confusion Matrix
+
+```{r}
+prediction.tree <- factor(ifelse(yhat.tree[,1] > 0.5, 'B', 'M'), levels = c('B', 'M'))
+actuals <- factor(test$diagnosis, levels = c("X0", "X1"), labels = c("B", "M"))
+cm_tree <- confusionMatrix(data = prediction.tree, reference = actuals, positive = "M")
+print(cm_tree)
+```
+
+The confusion matrix output indicates that the model is performing well.
+
+-   **Accuracy**: 0.9105:
+
+-   **Sensitivity**: 0.95;
+
+-   **Specificity**: 0.8818;
+
+Therefore, the tree model performs very well.
+
+### 6.4 The ROC Curve
+
+```{r}
+{auc.tree <-rocplot(pred=yhat.tree[,2],truth=test$diagnosis,lwd=2,colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.tree[[1]],4)),font=2)}
+```
+
+The **AUC value** of 0.9258 indicates that the model has a high ability to discriminate between classes, suggesting strong performance.
+
+## 7. Random Forest
+
+A **random forest** is an ensemble algorithm that builds multiple decision trees and combines their outputs to improve predictive accuracy,and provide a more robust classification or regression model.
+
+```{r}
+library(randomForest)
+```
+
+### 7.1 Model Performance
+
+```{r}
+p = dim(data)[2] - 1
+oob.err<-double(p)
+test.err<-double(p)
+
+n.train = dim(train)[1]
+subtrain.index = sample(1:n.train,round(n.train/3*2))
+
+for(mtry in 1:p) {
+  rf=randomForest(diagnosis ~ . , data = train , subset = subtrain.index,mtry=mtry,ntree=400) 
+  oob.err[mtry] = rf$err.rate[400,1] 
+  
+  pred<-predict(rf,train[-subtrain.index,]) 
+  test.err[mtry]= with(train[-subtrain.index,], mean( (diagnosis != pred))) 
+  
+  cat(mtry," ")
+  
+}
+```
+
+This plot is useful to determine the optimal number of predictors to consider at each split in a Random Forest model:
+
+```{r}
+{matplot(1:mtry , cbind(oob.err,test.err), pch=19 , col=c("red","blue"),type="b",ylab="Misclassification Error Rate",xlab="Number of Predictors Considered at each Split")
+legend("topright",legend=c("Out of Bag Error","Test Error"),pch=19, col=c("red","blue"))}
+```
+
+**Key features**:
+
+-   The plot compares the **Out of Bag Error** (red) and **Test Error** (blue) across different numbers of predictors considered at each split.
+
+-   Both error rates fluctuate, but generally remain low, indicating the model's good performance.
+
+-   The **Out of Bag Error** is slightly higher than the **Test Error** in most cases, suggesting that the model may slightly overfit to the training data.
+
+-   The optimal number of predictors is where both error rates are minimized and stable.
+
+### 7.2 Confusion Matrix
+
+```{r}
+rf <- randomForest(diagnosis ~ . , data = train , mtry=5,ntree=500)
+
+prediction.RF <-  predict(rf,test) 
+actuals <- factor(test$diagnosis, levels = c("X0", "X1"), labels = c("B", "M"))
+cm_rf <- confusionMatrix(data=prediction.RF,reference = actuals, positive = "M")  
+print(cm_rf)
+
+
+```
+
+The confusion matrix and statistics indicate that the Random Forest model performs exceptionally well in classifying breast cancer cases:
+
+-   **Accuracy**: 0.9526
+
+-   **Sensitivity**: 0.90
+
+-   **Specificity**: 0.99
+
+Overall, the model shows strong, reliable, and balanced performance in classifying breast cancer cases, with very few errors.
+
+```{r}
+importance(rf)
+```
+
+```{r}
+varImpPlot(rf)
+```
+
+The most important covariates are `concave.points_worst, perimeter_worst, concave.points_mean, radius worst, concavity_mean, concavity_worst, area_se, concave.points_mean`.
+
+### 7.3 The ROC Curve
+
+```{r}
+yhat.RF <- predict(rf,test,type='prob')[,2]
+{auc.RF <-  rocplot(pred=yhat.RF,truth=test$diagnosis,lwd=2,colorize=TRUE)
+text(0.8,0.2,paste0('AUC=',round(auc.RF[[1]],4)),font=2)}
+
+```
+
+This **ROC curve** demonstrates that the model has excellent predictive power, with a very high true positive rate and a very low false positive rate. The near-perfect **AUC** of 0.9955 further confirms the model’s effectiveness in distinguishing between the classes it was trained to predict. This level of performance suggests that the model is highly reliable for making predictions in the context it was applied to.
+
+## 8. Conclusion
+
+```{r}
+levels(prediction.RF) <- levels(test$diagnosis)
+levels(predictions_svc) <- levels(test$diagnosis)
+levels(pred_knn) <- levels(test$diagnosis)
+levels(prediction.tree) <- levels(test$diagnosis)
+levels(p)
+
+accuracy_rf <- mean(prediction.RF == test$diagnosis)
+accuracy_svc <- mean(predictions_svc == test$diagnosis)
+accuracy_knn <- mean(pred_knn == test$diagnosis)
+accuracy_tree <- mean(prediction.tree == test$diagnosis)
+accuracy_rate_logit
+
+
+accuracy_results <- data.frame( 
+  Model = c("Random Forest","SVC", "KNN","Tree","Logit"),
+  Accuracy = c(accuracy_rf, accuracy_svc,accuracy_knn,accuracy_tree, accuracy_rate_logit)
+)
+
+library(ggplot2)
+
+{ggplot(accuracy_results, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity") +
+  ylim(0, 1) +
+  labs(title = "Model Accuracy Comparison", y = "Accuracy") +
+  theme_minimal()}
+
+
+```
+
+The plot confirms that while all models perform well, the Support Vector Classifier model achieves the highest accuracy, making it the most reliable choice among the three for this particular classification task.
+
+```{r}
+sensitivity_logit <- cm_logit$byClass["Sensitivity"]
+specificity_logit <- cm_logit$byClass["Specificity"]
+
+sensitivity_knn <- cm_knn$byClass["Sensitivity"]
+specificity_knn <- cm_knn$byClass["Specificity"]
+
+sensitivity_svc <- cm_svc$byClass["Sensitivity"]
+specificity_svc <- cm_svc$byClass["Specificity"]
+
+sensitivity_rf <- cm_rf$byClass["Sensitivity"]
+specificity_rf <- cm_rf$byClass["Specificity"]
+
+
+results <- data.frame(
+  Model = rep(c("Logistic Regression", "KNN", "SVC", "Random Forest"), each = 2),
+  Metric = rep(c("Sensitivity", "Specificity"), times = 4),
+  Value = c(sensitivity_logit, specificity_logit,
+            sensitivity_knn, specificity_knn,
+            sensitivity_svc, specificity_svc,
+            sensitivity_rf, specificity_rf)
+)
+
+
+library(ggplot2)
+
+
+ggplot(results, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_text(aes(label = paste0(round(Value * 100, 1), "%")),
+            position = position_dodge(width = 0.9),
+            vjust = -0.5, size = 3.5) +
+  labs(title = "Sensitivity and Specificity Comparison",
+       y = "Value (%)",
+       x = "Model") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Sensitivity" = "purple", "Specificity" = "green"))
+
+```
+
+Overall, **SVC** appears to be the most balanced model, with a very high sensitivity and competitive specificity, making it suitable for scenarios when it's important to accurately identify both positive and negative cases.
+
+**KNN** shows a trade-off between sensitivity and specificity, having the highest specificity but the lowest sensitivity, which could mean it favors avoiding false positives at the cost of missing some positive cases.
